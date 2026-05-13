@@ -91,15 +91,18 @@ def apply_custom_style():
 
 # --- 3. LÓGICA DE NEGOCIO ---
 def get_gspread_client():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token: creds.refresh(Request())
+    # Intenta leer desde los secretos de Streamlit (Modo Nube)
+    try:
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    except:
+        # Si no hay secretos, intenta leer local (Modo Desarrollo)
+        if os.path.exists('token.json'):
+            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
         else:
             flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token: token.write(creds.to_json())
+            
     return gspread.authorize(creds), build('drive', 'v3', credentials=creds)
 
 def scan_receipt(image_bytes):
