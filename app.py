@@ -90,19 +90,26 @@ def apply_custom_style():
         """, unsafe_allow_html=True)
 
 # --- 3. LÓGICA DE NEGOCIO ---
+from google.oauth2.service_account import Credentials
+
 def get_gspread_client():
-    # Intenta leer desde los secretos de Streamlit (Modo Nube)
-    try:
-        creds_dict = st.secrets["gcp_service_account"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    except Exception as e:
-        # Si no encuentra secretos, usa los archivos locales (Modo Desarrollo en tu PC)
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
-            creds = flow.run_local_server(port=0)
+    # 1. Intentar el Modo Nube de forma prioritaria (Streamlit Secrets)
+    if "gcp_service_account" in st.secrets:
+        try:
+            creds_dict = st.secrets["gcp_service_account"]
+            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+            return gspread.authorize(creds), build('drive', 'v3', credentials=creds)
+        except Exception as e:
+            st.error(f"❌ Error crítico con las credenciales de los Secrets: {e}")
+            st.stop()
             
+    # 2. Modo Desarrollo Local (Solo corre si NO existen Secrets en la plataforma)
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+        creds = flow.run_local_server(port=0)
+        
     return gspread.authorize(creds), build('drive', 'v3', credentials=creds)
 
 def scan_receipt(image_bytes):
