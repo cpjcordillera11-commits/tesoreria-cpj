@@ -98,7 +98,7 @@ def get_gspread_client():
     st.error("Falta configurar gcp_service_account en los Secrets de Streamlit.")
     st.stop()
 
-# --- 4. MOTOR DE ESCANEO (OPENCV) ---
+# --- 4. MOTOR DE ESCANEO Y COMPRESIÓN ---
 def scan_receipt(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -108,15 +108,27 @@ def scan_receipt(image_bytes):
     gray = cv2.cvtColor(work_img, cv2.COLOR_BGR2GRAY)
     edged = cv2.Canny(cv2.GaussianBlur(gray, (7, 7), 0), 50, 150)
     cnts, _ = cv2.findContours(cv2.dilate(edged, np.ones((9,9), np.uint8), iterations=2), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
     if cnts:
         x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
         m = 40
         return orig, orig[int(max(0,y-m)*ratio):int((y+h+m)*ratio), int(max(0,x-m)*ratio):int((x+w+m)*ratio)]
     return orig, orig
 
-# Convertir imagen procesada a URL de datos para Sheets
-def image_to_base64_url(image_np):
-    _, buffer = cv2.imencode(".jpg", image_np)
+# COMPRESIÓN ULTRA: Redimensiona y baja la calidad para no romper la cuota de la celda
+def image_to_short_base64(image_np, max_width=350):
+    h, w = image_np.shape[:2]
+    if w > max_width:
+        new_h = int(h * (max_width / w))
+        # Achicamos la imagen físicamente en píxeles
+        resized = cv2.resize(image_np, (max_width, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        resized = image_np
+
+    # Guardamos como JPEG con calidad 45% (súper liviano pero legible)
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 45]
+    _, buffer = cv2.imencode(".jpg", resized, encode_param)
+    
     b64_string = base64.b64encode(buffer).decode("utf-8")
     return f"data:image/jpeg;base64,{b64_string}"
 
@@ -159,31 +171,31 @@ if submit:
         """, unsafe_allow_html=True)
         
         with st.spinner("Enviando a la estratosfera..."):
-            # Procesar el escaneo
             orig_np, crop_np = scan_receipt(archivo.read())
             
-            # Convertir imágenes a texto seguro
-            img_crop_url = image_to_base64_url(crop_np)
-            img_orig_url = image_to_base64_url(orig_np)
+            # Comprimimos el recorte. Solo mandaremos el CROP para asegurar espacio.
+            img_crop_url = image_to_short_base64(crop_np)
             
-            # Conectar a Sheets
             sh = client.open_by_key(SPREADSHEET_ID)
             try:
                 ws = sh.worksheet(nombre_hoja)
             except:
-                ws = sh.add_worksheet(title=nombre_hoja, rows="500", cols="11")
-                ws.append_row(['FECHA', 'MES', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', 'TARJETA CPJ', 'RESPONSABLE', 'TRANSFERIDO', 'BOLETA RECORTADA', 'FOTO ORIGINAL'])
+                ws = sh.add_worksheet(title=nombre_hoja, rows="500", cols="10")
+                ws.append_row(['FECHA', 'MES', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', 'TARJETA CPJ', 'RESPONSABLE', 'TRANSFERIDO', 'BOLETA'])
 
             mes_actual = MESES[hoy.month-1]
             
-            # Fila de datos con las URLs de las imágenes incluidas de forma nativa
             row = [
                 hoy.strftime("%d/%m/%Y %H:%M"), mes_actual, titulo, detalle, cifra, origen, tarjeta, resp, 
-                "SI" if transf else "NO", img_crop_url, img_orig_url
+                "SI" if transf else "NO", img_crop_url
             ]
-            ws.append_row(row, value_input_option='USER_ENTERED')
             
-            launch_placeholder.empty()
-            st.balloons()
-            st.success("¡Gasto registrado con éxito! 🚀")
-            st.image(crop_np, use_container_width=True)
+            try:
+                ws.append_row(row, value_input_option='USER_ENTERED')
+                launch_placeholder.empty()
+                st.balloons()
+                st.success("¡Gasto registrado con éxito! 🚀")
+                st.image(crop_np, use_container_width=True)
+            except Exception as e_api:
+                launch_placeholder.empty()
+                st.error(f"💥 Error al escribir en Google Sheets: {e_api}")
