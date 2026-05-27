@@ -95,8 +95,8 @@ def get_gspread_client():
     try:
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    except:
-        # Si no hay secretos, intenta leer local (Modo Desarrollo)
+    except Exception as e:
+        # Si no encuentra secretos, usa los archivos locales (Modo Desarrollo en tu PC)
         if os.path.exists('token.json'):
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
         else:
