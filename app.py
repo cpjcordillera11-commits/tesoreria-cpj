@@ -7,8 +7,6 @@ import io
 import base64
 from datetime import datetime
 from google.oauth2.service_account import Credentials
-# Nueva librería para manejar los formatos de las celdas
-from gspread_formatting import get_user_entered_format, format_cell_range
 
 # --- 1. CONFIGURACIÓN E IDs ---
 SPREADSHEET_ID = '1VlInzmxUY2YhkCLrM9Dc8K5coxWUCiQiYDkz5maQfns'
@@ -117,7 +115,6 @@ def scan_receipt(image_bytes):
         return orig, orig[int(max(0,y-m)*ratio):int((y+h+m)*ratio), int(max(0,x-m)*ratio):int((x+w+m)*ratio)]
     return orig, orig
 
-# Compresión optimizada para celdas de Sheets
 def image_to_short_base64(image_np, max_width=350):
     h, w = image_np.shape[:2]
     if w > max_width:
@@ -200,19 +197,18 @@ if submit:
                 # 1. Insertar la fila de datos
                 ws.append_row(row, value_input_option='USER_ENTERED')
                 
-                # 2. Lógica de clonación de formato (Fila 3 -> Fila Nueva)
+                # 2. Lógica de clonación nativa de Google Sheets (Paste Formats)
                 nueva_fila_idx = len(ws.get_all_values())
-                
-                # Recorremos de la columna A (1) a la J (10) copiando el formato celda por celda
-                for col_idx in range(1, 11):
-                    formato_origen = get_user_entered_format(ws, f"{gspread.utils.rowcol_to_a1(3, col_idx)}")
-                    if formato_origen:
-                        rango_destino = f"{gspread.utils.rowcol_to_a1(nueva_fila_idx, col_idx)}"
-                        format_cell_range(ws, rango_destino, formato_origen)
+                ws.copy_to(
+                    from_range=f"3:3",          # Copia toda la fila 3
+                    to_range=f"{nueva_fila_idx}:{nueva_fila_idx}", # Pega en la fila nueva
+                    paste_type="PASTE_FORMAT",  # Copia solo el formato/diseño
+                    direction="ROWS"
+                )
 
                 launch_placeholder.empty()
                 st.balloons()
-                st.success("¡Gasto registrado y formateado con éxito! 🚀")
+                st.success("¡Gasto registrado y formateado a la perfección! 🚀")
                 st.image(crop_np, use_container_width=True)
             except Exception as e_api:
                 launch_placeholder.empty()
