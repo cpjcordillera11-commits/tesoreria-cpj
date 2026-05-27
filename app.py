@@ -131,22 +131,38 @@ def upload_to_drive(name, image_np, folder_id, drive_service):
     try:
         _, buffer = cv2.imencode(".jpg", image_np)
         media = MediaIoBaseUpload(io.BytesIO(buffer), mimetype='image/jpeg', resumable=True)
+        
+        file_metadata = {
+            'name': name, 
+            'parents': [folder_id]
+        }
+        
+        # PARCHE: supportsAllDrives=True obliga a Google a usar la cuota de la carpeta compartida
         file = drive_service.files().create(
-            body={'name': name, 'parents': [folder_id]}, 
+            body=file_metadata, 
             media_body=media, 
-            fields='id, webViewLink'
+            fields='id, webViewLink',
+            supportsAllDrives=True  
         ).execute()
+        
         return file.get('webViewLink')
     except Exception as e:
-        # Esto rompe la censura de Streamlit y nos muestra el mensaje real de Google
         st.error(f"💥 Error real de Google Drive al subir '{name}': {e}")
         st.stop()
 
 def get_or_create_folder(parent_id, name, drive_service):
+    # Añadimos supportsAllDrives a la búsqueda
     q = f"name = '{name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    res = drive_service.files().list(q=q).execute().get('files', [])
-    if res: return res[0]['id']
-    return drive_service.files().create(body={'name': name, 'parents': [parent_id], 'mimeType': 'application/vnd.google-apps.folder'}, fields='id').execute().get('id')
+    res = drive_service.files().list(q=q, supportsAllDrives=True).execute().get('files', [])
+    if res: 
+        return res[0]['id']
+    
+    # Añadimos supportsAllDrives a la creación de la carpeta
+    return drive_service.files().create(
+        body={'name': name, 'parents': [parent_id], 'mimeType': 'application/vnd.google-apps.folder'}, 
+        fields='id',
+        supportsAllDrives=True
+    ).execute().get('id')
 
 # --- 4. EJECUCIÓN APP ---
 apply_custom_style()
