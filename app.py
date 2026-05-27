@@ -4,20 +4,16 @@ import numpy as np
 import gspread
 import os
 import io
+import base64
 from datetime import datetime
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from google.oauth2.service_account import Credentials
 
 # --- 1. CONFIGURACIÓN E IDs ---
-ROOT_FOLDER_ID = '1EXOjyMxXAL85E4l1zRM1wL-YLymMcrhU'
 SPREADSHEET_ID = '1VlInzmxUY2YhkCLrM9Dc8K5coxWUCiQiYDkz5maQfns'
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
 
-# --- 2. ESTILO Y ANIMACIÓN (CSS ACTUALIZADO) ---
+# --- 2. ESTILO Y ANIMACIÓN (CSS) ---
 def apply_custom_style():
     st.markdown("""
         <style>
@@ -46,9 +42,9 @@ def apply_custom_style():
             border: none !important;
         }
 
-        /* --- CONTENEDOR DEL COHETE (FIX: Z-INDEX ALTO) --- */
+        /* --- CONTENEDOR DEL COHETE --- */
         .launch-container {
-            position: fixed; /* Cambiado a fixed para que flote sobre todo */
+            position: fixed;
             top: 40%;
             left: 50%;
             transform: translate(-50%, -50%);
@@ -57,8 +53,8 @@ def apply_custom_style():
             display: flex;
             justify-content: center;
             align-items: flex-end;
-            z-index: 9999 !important; /* Trae el cohete al frente de todo */
-            pointer-events: none; /* Evita que bloquee clics */
+            z-index: 9999 !important;
+            pointer-events: none;
         }
 
         .rocket-fly {
@@ -89,29 +85,20 @@ def apply_custom_style():
         </style>
         """, unsafe_allow_html=True)
 
-# --- 3. LÓGICA DE NEGOCIO ---
-from google.oauth2.service_account import Credentials
-
+# --- 3. AUTENTICACIÓN GOOGLE SHEETS ---
 def get_gspread_client():
-    # 1. Intentar el Modo Nube de forma prioritaria (Streamlit Secrets)
     if "gcp_service_account" in st.secrets:
         try:
             creds_dict = st.secrets["gcp_service_account"]
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-            return gspread.authorize(creds), build('drive', 'v3', credentials=creds)
+            return gspread.authorize(creds)
         except Exception as e:
-            st.error(f"❌ Error crítico con las credenciales de los Secrets: {e}")
+            st.error(f"❌ Error con los Secrets: {e}")
             st.stop()
-            
-    # 2. Modo Desarrollo Local (Solo corre si NO existen Secrets en la plataforma)
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-        
-    return gspread.authorize(creds), build('drive', 'v3', credentials=creds)
+    st.error("Falta configurar gcp_service_account en los Secrets de Streamlit.")
+    st.stop()
 
+# --- 4. MOTOR DE ESCANEO (OPENCV) ---
 def scan_receipt(image_bytes):
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -127,53 +114,17 @@ def scan_receipt(image_bytes):
         return orig, orig[int(max(0,y-m)*ratio):int((y+h+m)*ratio), int(max(0,x-m)*ratio):int((x+w+m)*ratio)]
     return orig, orig
 
-def upload_to_drive(name, image_np, folder_id, drive_service):
-    try:
-        _, buffer = cv2.imencode(".jpg", image_np)
-        media = MediaIoBaseUpload(io.BytesIO(buffer), mimetype='image/jpeg', resumable=True)
-        
-        file_metadata = {
-            'name': name, 
-            'parents': [folder_id]
-        }
-        
-        # PARCHE: supportsAllDrives=True obliga a Google a usar la cuota de la carpeta compartida
-        file = drive_service.files().create(
-            body=file_metadata, 
-            media_body=media, 
-            fields='id, webViewLink',
-            supportsAllDrives=True  
-        ).execute()
-        
-        return file.get('webViewLink')
-    except Exception as e:
-        st.error(f"💥 Error real de Google Drive al subir '{name}': {e}")
-        st.stop()
+# Convertir imagen procesada a URL de datos para Sheets
+def image_to_base64_url(image_np):
+    _, buffer = cv2.imencode(".jpg", image_np)
+    b64_string = base64.b64encode(buffer).decode("utf-8")
+    return f"data:image/jpeg;base64,{b64_string}"
 
-def get_or_create_folder(parent_id, name, drive_service):
-    # Añadimos supportsAllDrives a la búsqueda
-    q = f"name = '{name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    res = drive_service.files().list(q=q, supportsAllDrives=True).execute().get('files', [])
-    if res: 
-        return res[0]['id']
-    
-    # Añadimos supportsAllDrives a la creación de la carpeta
-    return drive_service.files().create(
-        body={'name': name, 'parents': [parent_id], 'mimeType': 'application/vnd.google-apps.folder'}, 
-        fields='id',
-        supportsAllDrives=True
-    ).execute().get('id')
-
-# --- 4. EJECUCIÓN APP ---
+# --- 5. EJECUCIÓN APP ---
 apply_custom_style()
 st.markdown("<h1>⛪ Tesorería CPJ 💸</h1><div class='title-underline'></div>", unsafe_allow_html=True)
 
-try:
-    client, drive_service = get_gspread_client()
-except:
-    st.info("Autoriza la app en la pestaña abierta.")
-    st.stop()
-
+client = get_gspread_client()
 hoy = datetime.now()
 nombre_hoja = f"{hoy.year}-{1 if 2 <= hoy.month <= 7 else 2}"
 
@@ -196,7 +147,7 @@ if submit:
     if not titulo or not cifra or not archivo:
         st.error("⚠️ Completa los datos obligatorios.")
     else:
-        # --- ANIMACIÓN DE DESPEGUE (AL FRENTE) ---
+        # --- ANIMACIÓN DE DESPEGUE ---
         launch_placeholder = st.empty()
         launch_placeholder.markdown("""
             <div class="launch-container">
@@ -208,17 +159,31 @@ if submit:
         """, unsafe_allow_html=True)
         
         with st.spinner("Enviando a la estratosfera..."):
+            # Procesar el escaneo
             orig_np, crop_np = scan_receipt(archivo.read())
-            id_mes = get_or_create_folder(get_or_create_folder(ROOT_FOLDER_ID, nombre_hoja, drive_service), MESES[hoy.month-1], drive_service)
             
-            b_name = f"{titulo}_{hoy.strftime('%d-%m-%Y_%H%M')}"
-            l_crop = upload_to_drive(f"CROP_{b_name}.jpg", crop_np, id_mes, drive_service)
-            l_orig = upload_to_drive(f"ORIG__{b_name}.jpg", orig_np, id_mes, drive_service)
+            # Convertir imágenes a texto seguro
+            img_crop_url = image_to_base64_url(crop_np)
+            img_orig_url = image_to_base64_url(orig_np)
             
-            row = [hoy.strftime("%d/%m/%Y %H:%M"), titulo, detalle, cifra, origen, tarjeta, resp, "SI" if transf else "NO", f'=HYPERLINK("{l_crop}";"BOLETA")', f'=HYPERLINK("{l_orig}";"ORIGINAL")']
-            client.open_by_key(SPREADSHEET_ID).worksheet(nombre_hoja).append_row(row, value_input_option='USER_ENTERED')
+            # Conectar a Sheets
+            sh = client.open_by_key(SPREADSHEET_ID)
+            try:
+                ws = sh.worksheet(nombre_hoja)
+            except:
+                ws = sh.add_worksheet(title=nombre_hoja, rows="500", cols="11")
+                ws.append_row(['FECHA', 'MES', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', 'TARJETA CPJ', 'RESPONSABLE', 'TRANSFERIDO', 'BOLETA RECORTADA', 'FOTO ORIGINAL'])
+
+            mes_actual = MESES[hoy.month-1]
+            
+            # Fila de datos con las URLs de las imágenes incluidas de forma nativa
+            row = [
+                hoy.strftime("%d/%m/%Y %H:%M"), mes_actual, titulo, detalle, cifra, origen, tarjeta, resp, 
+                "SI" if transf else "NO", img_crop_url, img_orig_url
+            ]
+            ws.append_row(row, value_input_option='USER_ENTERED')
             
             launch_placeholder.empty()
             st.balloons()
-            st.success("¡Gasto registrado! 🚀")
+            st.success("¡Gasto registrado con éxito! 🚀")
             st.image(crop_np, use_container_width=True)
