@@ -128,10 +128,19 @@ def scan_receipt(image_bytes):
     return orig, orig
 
 def upload_to_drive(name, image_np, folder_id, drive_service):
-    _, buffer = cv2.imencode(".jpg", image_np)
-    media = MediaIoBaseUpload(io.BytesIO(buffer), mimetype='image/jpeg', resumable=True)
-    file = drive_service.files().create(body={'name': name, 'parents': [folder_id]}, media_body=media, fields='id, webViewLink').execute()
-    return file.get('webViewLink')
+    try:
+        _, buffer = cv2.imencode(".jpg", image_np)
+        media = MediaIoBaseUpload(io.BytesIO(buffer), mimetype='image/jpeg', resumable=True)
+        file = drive_service.files().create(
+            body={'name': name, 'parents': [folder_id]}, 
+            media_body=media, 
+            fields='id, webViewLink'
+        ).execute()
+        return file.get('webViewLink')
+    except Exception as e:
+        # Esto rompe la censura de Streamlit y nos muestra el mensaje real de Google
+        st.error(f"💥 Error real de Google Drive al subir '{name}': {e}")
+        st.stop()
 
 def get_or_create_folder(parent_id, name, drive_service):
     q = f"name = '{name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
