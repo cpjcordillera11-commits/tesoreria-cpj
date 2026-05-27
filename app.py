@@ -7,6 +7,8 @@ import io
 import base64
 from datetime import datetime
 from google.oauth2.service_account import Credentials
+# Nueva librería para manejar los formatos de las celdas
+from gspread_formatting import get_user_entered_format, format_cell_range
 
 # --- 1. CONFIGURACIÓN E IDs ---
 SPREADSHEET_ID = '1VlInzmxUY2YhkCLrM9Dc8K5coxWUCiQiYDkz5maQfns'
@@ -179,10 +181,8 @@ if submit:
                 ws = sh.add_worksheet(title=nombre_hoja, rows="500", cols="10")
                 ws.append_row(['FECHA', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', '¿TARJETA CPJ?', 'RESPONSABLE', '¿SE TRANSFIRIÓ?', 'BOLETA', 'ORIGEN FOTO'])
 
-            # Formatear la celda usando la fórmula IMAGE nativa de Sheets
             formula_imagen = f'=IMAGE("{img_crop_url}"; 1)'
             
-            # --- CORRECCIÓN EN EL ORDEN EXACTO DE TU PRIMER CÓDIGO ---
             row = [
                 hoy.strftime("%d/%m/%Y %H:%M"), 
                 titulo, 
@@ -192,16 +192,28 @@ if submit:
                 tarjeta, 
                 resp, 
                 "SI" if transf else "NO", 
-                formula_imagen,             # Columna I: Boleta en miniatura
-                "NUBE (Base64)"             # Columna J: Indicador de origen
+                formula_imagen,
+                "NUBE (Base64)"
             ]
             
             try:
+                # 1. Insertar la fila de datos
                 ws.append_row(row, value_input_option='USER_ENTERED')
+                
+                # 2. Lógica de clonación de formato (Fila 3 -> Fila Nueva)
+                nueva_fila_idx = len(ws.get_all_values())
+                
+                # Recorremos de la columna A (1) a la J (10) copiando el formato celda por celda
+                for col_idx in range(1, 11):
+                    formato_origen = get_user_entered_format(ws, f"{gspread.utils.rowcol_to_a1(3, col_idx)}")
+                    if formato_origen:
+                        rango_destino = f"{gspread.utils.rowcol_to_a1(nueva_fila_idx, col_idx)}"
+                        format_cell_range(ws, rango_destino, formato_origen)
+
                 launch_placeholder.empty()
                 st.balloons()
-                st.success("¡Gasto registrado con éxito! 🚀")
+                st.success("¡Gasto registrado y formateado con éxito! 🚀")
                 st.image(crop_np, use_container_width=True)
             except Exception as e_api:
                 launch_placeholder.empty()
-                st.error(f"💥 Error al escribir en Google Sheets: {e_api}")
+                st.error(f"💥 Error al escribir o formatear en Sheets: {e_api}")
