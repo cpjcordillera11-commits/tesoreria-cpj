@@ -115,17 +115,15 @@ def scan_receipt(image_bytes):
         return orig, orig[int(max(0,y-m)*ratio):int((y+h+m)*ratio), int(max(0,x-m)*ratio):int((x+w+m)*ratio)]
     return orig, orig
 
-# COMPRESIÓN ULTRA: Redimensiona y baja la calidad para no romper la cuota de la celda
+# Compresión optimizada para celdas de Sheets
 def image_to_short_base64(image_np, max_width=350):
     h, w = image_np.shape[:2]
     if w > max_width:
         new_h = int(h * (max_width / w))
-        # Achicamos la imagen físicamente en píxeles
         resized = cv2.resize(image_np, (max_width, new_h), interpolation=cv2.INTER_AREA)
     else:
         resized = image_np
 
-    # Guardamos como JPEG con calidad 45% (súper liviano pero legible)
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 45]
     _, buffer = cv2.imencode(".jpg", resized, encode_param)
     
@@ -172,8 +170,6 @@ if submit:
         
         with st.spinner("Enviando a la estratosfera..."):
             orig_np, crop_np = scan_receipt(archivo.read())
-            
-            # Comprimimos el recorte. Solo mandaremos el CROP para asegurar espacio.
             img_crop_url = image_to_short_base64(crop_np)
             
             sh = client.open_by_key(SPREADSHEET_ID)
@@ -181,13 +177,23 @@ if submit:
                 ws = sh.worksheet(nombre_hoja)
             except:
                 ws = sh.add_worksheet(title=nombre_hoja, rows="500", cols="10")
-                ws.append_row(['FECHA', 'MES', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', 'TARJETA CPJ', 'RESPONSABLE', 'TRANSFERIDO', 'BOLETA'])
+                ws.append_row(['FECHA', 'TÍTULO', 'DETALLE', 'CIFRA', 'ORIGEN', '¿TARJETA CPJ?', 'RESPONSABLE', '¿SE TRANSFIRIÓ?', 'BOLETA', 'ORIGEN FOTO'])
 
-            mes_actual = MESES[hoy.month-1]
+            # Formatear la celda usando la fórmula IMAGE nativa de Sheets
+            formula_imagen = f'=IMAGE("{img_crop_url}"; 1)'
             
+            # --- CORRECCIÓN EN EL ORDEN EXACTO DE TU PRIMER CÓDIGO ---
             row = [
-                hoy.strftime("%d/%m/%Y %H:%M"), mes_actual, titulo, detalle, cifra, origen, tarjeta, resp, 
-                "SI" if transf else "NO", img_crop_url
+                hoy.strftime("%d/%m/%Y %H:%M"), 
+                titulo, 
+                detalle, 
+                cifra, 
+                origen, 
+                tarjeta, 
+                resp, 
+                "SI" if transf else "NO", 
+                formula_imagen,             # Columna I: Boleta en miniatura
+                "NUBE (Base64)"             # Columna J: Indicador de origen
             ]
             
             try:
